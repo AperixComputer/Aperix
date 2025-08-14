@@ -1,0 +1,13 @@
+Status: In Progress
+Description: Convert RISC-V assembly code (textual) into RISC-V machine code (executable).
+Input: RISC-V Assembly Code
+Output: RISC-V Machine Code
+Usage (Unix): `cc riscv-assembler.c && ./a.out your_file.rvasm`
+Usage (Windows): `tcc riscv-assembler.c; riscv-assembler.exe your_file.rvasm`
+
+This assembler is made of three primitives: registers, encodings, and instructions.
+A register is a named piece of memory closest to the CPU (example `RV_REG_X0` for the first register).
+An encoding is the bit pattern used to represent an instruction (example: `rv_encode_R` for R-type).
+An instruction is a command for the hardware to execute (example: `rv_add` for summing two registers into a third).
+
+You may specify `-DAPERIX_NO_MAIN` to `cc` if you wish to use the primitives in your own programs.
