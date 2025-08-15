@@ -22,7 +22,7 @@ def J(opcode: int, rd: int, imm20: int) -> int:
 def B(opcode: int, funct3: int, rs1: int, rs2: int, imm12: int) -> int:
   return (imm12 & 0x800) << 20 | (imm12 & 0x7E0) << 20 | (rs2 & 0x1F) << 20 | (rs1 & 0x1F) << 15 | (funct3 & 0x7) << 12 | (imm12 & 0x1E) << 7 | (imm12 & 0x800) >> 4 | (opcode & 0x7F) << 0
 def S(opcode: int, funct3: int, rs1: int, rs2: int, imm12: int) -> int:
-  return (imm12 & 0xFE) << 24 | (rs2 & 0x1F) << 20 | (rs1 & 0x1F) << 15 | (funct3 & 0x7) << 12 | (imm12 & 0x1F) << 7 | (opcode & 0x7F) << 0
+  return (imm12 & 0xFE0) << 20 | (rs2 & 0x1F) << 20 | (rs1 & 0x1F) << 15 | (funct3 & 0x7) << 12 | (imm12 & 0x1F) << 7 | (opcode & 0x7F) << 0
 
 class RISCVWriter(BinaryWriter):
   def db(self, *values: int) -> None: self.emit(1, *values)
@@ -32,18 +32,23 @@ class RISCVWriter(BinaryWriter):
 
   def add(self, rd: int, rs1: int, rs2: int) -> None: self.dw(R(0b0110011, 0b0000000, 0b000, rd, rs1, rs2))
   def addi(self, rd: int, rs1: int, imm12: int) -> None: self.dw(I(0b0010011, 0b000, rd, rs1, imm12))
+  def lui(self, rd: int, imm20: int) -> None: self.dw(U(0b0110111, rd, imm20))
   def auipc(self, rd: int, imm20: int) -> None: self.dw(U(0b0010111, rd, imm20))
   def jal(self, rd: int, imm20: int) -> None: self.dw(J(0b1101111, rd, imm20))
   def beq(self, rs1: int, rs2: int, imm12: int) -> None: self.dw(B(0b1100011, 0b000, rs1, rs2, imm12))
   def sb(self, rs1: int, rs2: int, imm12: int) -> None: self.dw(S(0b0100011, 0b000, rs1, rs2, imm12))
 
-asm = RISCVWriter()
-asm.add(x1, x2, x3)
-asm.addi(x1, x2, 512)
-asm.auipc(x5, 0x12345)
-asm.jal(x10, 0x12344)
-asm.beq(x1, x2, 0x556)
-asm.sb(x2, x3, -0x555)
+w = RISCVWriter()
 
-for n in range(0, len(asm.output), 4):
-  print(f"0x{int.from_bytes(asm.output[n:n+4], byteorder="little"):08X}")
+UART_BASE = 0x10000000
+w.lui(t0, UART_BASE >> 12)
+w.addi(t1, x0, ord('A'))
+w.sb(t0, t1, 0)
+w.addi(t1, x0, ord('B'))
+w.sb(t0, t1, 0)
+w.jal(x0, 0)
+
+for n in range(0, len(w.output), 4):
+  print(f"0x{int.from_bytes(w.output[n:n+4], byteorder="little"):08X}")
+
+with open("boot.bin", "wb") as f: f.write(w.output)
