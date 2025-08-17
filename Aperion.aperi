@@ -1,0 +1,2 @@
+(:: x 5)
+(:= world "Hello, world!\n")
