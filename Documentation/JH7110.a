@@ -1,0 +1,6 @@
+(:: kind 'SOC)
+(:: manufacturer "StarFive")
+(:: model "JH-7110")
+(:: cpus ([] (import "U74MC4") (import "S76") (import "E24")))
+(:: gpus ([] (import "BXE-4-32")))
+(:: rams ([] ({} #soldered true #size 8e9)))

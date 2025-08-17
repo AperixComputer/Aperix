@@ -1,0 +1,6 @@
+(:: kind 'CPU)
+(:: manufacturer "SiFive")
+(:: model "U74MC4")
+(:: architecture "RV64IMAFDC")
+(:: clockrate-hz 1.5e9)
+(:: cores 4)
