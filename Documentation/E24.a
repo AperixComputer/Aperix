@@ -1,6 +1,0 @@
-(:: kind 'CPU)
-(:: manufacturer "SiFive")
-(:: model "E24")
-(:: architecture "RV32IMAFCB")
-(:: clockrate-hz 192e6)
-(:: cores 1)

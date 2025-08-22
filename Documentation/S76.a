@@ -1,6 +1,0 @@
-(:: kind 'CPU)
-(:: manufacturer "SiFive")
-(:: model "S76")
-(:: architecture "RV64IMAC")
-(:: clockrate-hz 1.0e9)
-(:: cores 1)
