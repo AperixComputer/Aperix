@@ -28,8 +28,17 @@ def parse(s: str, p: int) -> tuple[Code | None, int]:
         popped = stack.pop()
         stack[-1].data.append(popped)
     elif s[p].isdigit():
-      while p < len(s) and s[p].isdigit(): p += 1
+      if p + 1 < len(s) and s[p] == '0' and s[p + 1] in "xob":
+        p += 2
+        assert p < len(s) and s[p].isdigit()
+      while p < len(s) and (s[p].isdigit() or 'a' <= s[p].lower() <= 'f'): p += 1
       (stack[-1].data if len(stack) > 0 else stack).append(Code(start, Number(s[start:p], base=0)))
+    elif s[p] == '"':
+      p += 1
+      while p < len(s) and (s[p - 1] == "\\" or s[p] != '"'): p += 1
+      assert p < len(s) and s[p] == '"'
+      p += 1
+      (stack[-1].data if len(stack) > 0 else stack).append(Code(start, String(s[start+1:p-1])))
     else:
       while p < len(s) and s[p] not in "() \t\n\r": p += 1
       (stack[-1].data if len(stack) > 0 else stack).append(Code(start, Identifier(s[start:p])))
@@ -48,6 +57,9 @@ class RISCVWriter:
     self.labels = {}
     self.fixups = []
     for i in range(32): setattr(self, f"x{i}", i)
+    self.t0 = self.x5
+    self.t1 = self.x6
+    self.t2 = self.x7
   def eval(self, code: Code) -> None:
     if not isinstance(code.data, Tuple):
       if isinstance(code.data, Identifier): return getattr(self, code.data) if hasattr(self, code.data) else Label(code.data)
@@ -57,8 +69,18 @@ class RISCVWriter:
       name, = args
       assert isinstance(name.data, Identifier)
       self.labels[name.data] = self.cursor
+    elif op.data == Identifier("ord"):
+      arg, = args
+      assert isinstance(arg.data, String)
+      return Number(ord(arg.data))
+    elif op.data == Identifier(">>"):
+      arg, amount = args
+      assert isinstance(arg.data, Number)
+      assert isinstance(amount.data, Number)
+      return Number(arg.data >> amount.data)
     else:
       proc = self.eval(op)
+      if isinstance(proc, Label): raise NotImplementedError(proc)
       pargs = [self.eval(arg) for arg in args]
       return proc(*pargs)
   def fixup(self) -> None:
@@ -68,6 +90,10 @@ class RISCVWriter:
   def J(self, opcode: int, rd: int, imm20: int) -> int: return (imm20 & 0x80000) << 12 | (imm20 & 0x7FE) << 20 | (imm20 & 0x800) << 9 | (imm20 & 0xFF000) << 0 | (rd & 0x1F) << 7 | (opcode & 0x7F) << 0
   def I(self, opcode: int, funct3: int, rd: int, rs1: int, imm12: int) -> int:
     return (imm12 & 0xFFF) << 20 | (rs1 & 0x1F) << 15 | (funct3 & 0x7) << 12 | (rd & 0x1F) << 7 | (opcode & 0x7F) << 0
+  def U(self, opcode: int, rd: int, imm20: int) -> int:
+    return (imm20 & 0xFFFFF) << 12 | (rd & 0x1F) << 7 | (opcode & 0x7F) << 0
+  def S(self, opcode: int, funct3: int, rs1: int, rs2: int, imm12: int) -> int:
+    return (imm12 & 0xFE0) << 20 | (rs2 & 0x1F) << 20 | (rs1 & 0x1F) << 15 | (funct3 & 0x7) << 12 | (imm12 & 0x1F) << 7 | (opcode & 0x7F) << 0
 
   def emit(self, n: int, *values: int | dict) -> None:
     for value in values:
@@ -83,6 +109,9 @@ class RISCVWriter:
 
   def wfi(self) -> None: self.dw(self.I(0b1110011, 0b000, 0b00000, 0b00000, 0b000100000101))
   def jal(self, rd: int, imm20: int | Label) -> None: self.dw({"op": self.J, "args": (0b1101111, rd, imm20), "mode": "relative"})
+  def addi(self, rd: int, rs1: int, imm12: int) -> None: self.dw(self.I(0b0010011, 0b000, rd, rs1, imm12))
+  def lui(self, rd: int, imm20: int) -> None: self.dw(self.U(0b0110111, rd, imm20))
+  def sb(self, rs2: int, rs1: int, imm12: int) -> None: self.dw(self.S(0b0100011, 0b000, rs1, rs2, imm12))
 
 def dostring(s: str, visitor) -> None:
   p = 0
@@ -99,4 +128,4 @@ if __name__ == "__main__":
   w = RISCVWriter()
   dostring(src, w.eval)
   w.fixup()
-  with open(Path(sys.argv[1]).with_suffix(".bin"), "wb") as f: f.write(w.output)
+  with open(Path(sys.argv[1]).with_suffix(".rv64bin"), "wb") as f: f.write(w.output)
