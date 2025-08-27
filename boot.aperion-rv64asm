@@ -1,0 +1,3 @@
+(label halt)
+(wfi)
+(jal x0 halt)
