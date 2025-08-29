@@ -42,7 +42,16 @@ class RISCVWriter(BinaryWriter):
     self.t0 = self.x5
     self.t1 = self.x6
     self.t2 = self.x7
+    self.s1 = self.x9
+    self.a0 = self.x10
+    self.a1 = self.x11
+    self.s2 = self.x18
+    self.s3 = self.x19
+    self.s4 = self.x20
+    self.s5 = self.x21
     self.t3 = self.x28
+    self.t4 = self.x29
+    self.t5 = self.x30
     self.mhartid = 0b111100010100
   def I(self, opcode: int, funct3: int, rd: int, rs1: int, imm12: int) -> int:
     return (imm12 & 0xFFF) << 20 | (rs1 & 0x1F) << 15 | (funct3 & 0x7) << 12 | (rd & 0x1F) << 7 | (opcode & 0x7F) << 0
@@ -54,9 +63,12 @@ class RISCVWriter(BinaryWriter):
     return (imm20 & 0xFFFFF) << 12 | (rd & 0x1F) << 7 | (opcode & 0x7F) << 0
   def B(self, opcode: int, funct3: int, rs1: int, rs2: int, imm12: int) -> int:
     return (imm12 & 0x800) << 20 | (imm12 & 0x7E0) << 20 | (rs2 & 0x1F) << 20 | (rs1 & 0x1F) << 15 | (funct3 & 0x7) << 12 | (imm12 & 0x1E) << 7 | (imm12 & 0x800) >> 4 | (opcode & 0x7F) << 0
+  def R(self, opcode: int, funct7: int, funct3: int, rd: int, rs1: int, rs2: int) -> int:
+    return (funct7 & 0x7F) << 25 | (rs2 & 0x1F) << 20 | (rs1 & 0x1F) << 15 | (funct3 & 0x7) << 12 | (rd & 0x1F) << 7 | (opcode & 0x7F) << 0
   def hi20(self, addr: int): return (addr + 0x800) >> 12
   def lo12(self, addr: int): return addr - (self.hi20(addr) << 12)
   def wfi(self) -> None: self.dw(self.I(0b1110011, 0b000, 0b00000, 0b00000, 0b000100000101))
+  def add(self, rd: int, rs1: int, rs2: int) -> None: self.dw(self.R(0b0110011, 0b0000000, 0b000, rd, rs1, rs2))
   def addi(self, rd: int, rs1: int, imm12: int) -> None: self.dw({"op": self.I, "args": (0b0010011, 0b000, rd, rs1, imm12)})
   def andi(self, rd: int, rs1: int, imm12: int) -> None: self.dw(self.I(0b0010011, 0b111, rd, rs1, imm12))
   def jal(self, rd: int, imm20: int) -> None: self.dw({"op": self.J, "args": (0b1101111, rd, imm20)})
@@ -67,6 +79,8 @@ class RISCVWriter(BinaryWriter):
   def csrrs(self, rd: int, csr: int, rs1: int) -> None: self.dw({"op": self.I, "args": (0b1110011, 0b010, rd, rs1, csr)})
   def beq(self, rs1: int, rs2: int, imm12: int) -> None: self.dw({"op": self.B, "args": (0b1100011, 0b000, rs1, rs2, imm12)})
   def bne(self, rs1: int, rs2: int, imm12: int) -> None: self.dw({"op": self.B, "args": (0b1100011, 0b001, rs1, rs2, imm12)})
+  def ld(self, rd: int, rs1: int, imm12: int) -> None: self.dw({"op": self.I, "args": (0b0000011, 0b011, rd, rs1, imm12)})
+  def srl(self, rd: int, rs1: int, rs2: int) -> None: self.dw(self.R(0b0110011, 0b0000000, 0b101, rd, rs1, rs2))
 
 w = RISCVWriter()
 
@@ -82,27 +96,90 @@ w.csrrs(w.t0, w.mhartid, w.x0)
 w.bne(w.t0, w.x0, "halt")
 
 w.lui(w.t2, lambda _: w.hi20(w.labels["hw"]))
-w.addi(w.t2, w.t2, lambda _: w.lo12(w.labels["hw"]))
+w.addi(w.a0, w.t2, lambda _: w.lo12(w.labels["hw"]))
 w.jal(w.ra, "uart_puts")
 
+for i in range(32):
+  w.lui(w.t2, lambda _, i=i: w.hi20(w.labels[f"reg_x{i}_prompt"]))
+  w.addi(w.a0, w.t2, lambda _, i=i: w.lo12(w.labels[f"reg_x{i}_prompt"]))
+  w.jal(w.ra, "uart_puts")
+  w.add(w.a0, w.x0, w.x0 + i)
+  w.jal(w.ra, "uart_print_hex64")
+  w.lui(w.t2, lambda _: w.hi20(w.labels["newline"]))
+  w.addi(w.a0, w.t2, lambda _: w.lo12(w.labels["newline"]))
+  w.jal(w.ra, "uart_puts")
+
 w.jal(w.x0, "halt")
+
+w.label("uart_print_hex64")
+
+w.add(w.s1, w.x0, w.ra)
+w.add(w.s2, w.x0, w.a0)
+
+w.addi(w.a0, w.x0, ord("0"))
+w.jal(w.ra, "uart_putc")
+w.addi(w.a0, w.x0, ord("x"))
+w.jal(w.ra, "uart_putc")
+
+w.add(w.a0, w.x0, w.s2)
+w.add(w.ra, w.x0, w.s1)
+
+w.add(w.t2, w.x0, w.a0)
+w.addi(w.t3, w.x0, 60)
+w.lui(w.t0, lambda _: w.hi20(w.labels["hexdigits"]))
+w.addi(w.t0, w.t0, lambda _: w.lo12(w.labels["hexdigits"]))
+
+w.label("uart_print_hex64.loop")
+w.srl(w.t1, w.t2, w.t3)
+w.andi(w.t1, w.t1, 0xF)
+w.add(w.t1, w.t1, w.t0)
+w.lb(w.a0, w.t1, 0)
+
+w.lui(w.t4, UART_BASE >> 12)
+
+w.label("uart_print_hex64.wait_for_uart_ready")
+w.lb(w.t5, w.t4, UART_LSR << UART_REG_SHIFT)
+w.andi(w.t5, w.t5, UART_LSR_THRE)
+w.beq(w.t5, w.x0, "uart_print_hex64.wait_for_uart_ready")
+
+w.sb(w.a0, w.t4, UART_THR << UART_REG_SHIFT)
+
+w.beq(w.t3, w.x0, "uart_print_hex64.end")
+w.addi(w.t3, w.t3, -4)
+w.jal(w.x0, "uart_print_hex64.loop")
+
+w.label("uart_print_hex64.end")
+w.jalr(w.x0, w.ra, 0)
+
+w.label("uart_putc")
+
+w.lui(w.t0, UART_BASE >> 12)
+
+w.label("uart_putc.wait_for_uart_ready")
+w.lb(w.t1, w.t0, UART_LSR << UART_REG_SHIFT)
+w.andi(w.t1, w.t1, UART_LSR_THRE)
+w.beq(w.t1, w.x0, "uart_putc.wait_for_uart_ready")
+
+w.sb(w.a0, w.t0, UART_THR << UART_REG_SHIFT)
+
+w.jalr(w.x0, w.ra, 0)
 
 w.label("uart_puts")
 
 w.lui(w.t0, UART_BASE >> 12)
 
 w.label("uart_puts.loop")
-w.lb(w.t1, w.t2, 0)
+w.lb(w.t1, w.a0, 0)
 w.beq(w.t1, w.x0, "uart_puts.end")
 
-w.label("wait_for_uart_ready")
+w.label("uart_puts.wait_for_uart_ready")
 w.lb(w.t3, w.t0, UART_LSR << UART_REG_SHIFT)
 w.andi(w.t3, w.t3, UART_LSR_THRE)
-w.beq(w.t3, w.x0, "wait_for_uart_ready")
+w.beq(w.t3, w.x0, "uart_puts.wait_for_uart_ready")
 
 w.sb(w.t1, w.t0, UART_THR << UART_REG_SHIFT)
 
-w.addi(w.t2, w.t2, 1)
+w.addi(w.a0, w.a0, 1)
 w.jal(w.x0, "uart_puts.loop")
 
 w.label("uart_puts.end")
@@ -114,6 +191,13 @@ w.jal(w.x0, "halt")
 
 w.label("hw")
 w.db("Hello, world!\n\r\0")
+w.label("hexdigits")
+w.db("0123456789ABCDEF")
+w.label("newline")
+w.db("\n\r\0")
+for i in range(32):
+  w.label(f"reg_x{i}_prompt")
+  w.db(f"x{str(i).ljust(2, " ")}: \0")
 
 w.fixup()
 with open("boot.bin", "wb") as f: f.write(w.output)
