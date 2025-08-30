@@ -1,2 +1,3 @@
 (proc I ((: opcode u32) (: rd u32) (: imm20 u32)) u32
   (return (| (<< (& imm20 0xFFFFF) 12) (<< (& rd 0x1F) 7) (<< (& opcode 0x7F) 0))))
+(I 0b1100011 0x0 0x0)

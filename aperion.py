@@ -80,6 +80,7 @@ class Type: pass
 class SimpleType(Type):
   def __init__(self, name: str) -> None:
     self.name = name
+  def __repr__(self) -> str: return f"SimpleType({self.name})"
 class IntegerType(Type):
   def __init__(self, bits: int, signed: bool) -> None:
     self.bits = bits
@@ -110,6 +111,20 @@ class Procedure:
     self.parameters = parameters
     self.returns = returns
     self.body_codes = body_codes
+  def __call__(self, *args) -> "Value":
+    return_value = value_void
+    procedure_scope = Scope(compiler_scope)
+    def return_stmt(value: "Value") -> "Value":
+      nonlocal return_value; return_value = value; return value_void
+    procedure_scope.entries.update({
+      Identifier("return"): ScopeEntry(Value(type_procedure, return_stmt), constant=True)
+    })
+    for i, (name_value, type_value) in enumerate(self.parameters):
+      procedure_scope.entries.update({Identifier(value_as_string(name_value)): ScopeEntry(args[i], constant=False)})
+    for code in self.body_codes:
+      result = evaluate_code(code, procedure_scope)
+      # if result is not value_void: print("=>", value_as_string(result))
+    return return_value
 
 class Value:
   def __init__(self, ty: Type, contents: Type | Code | Procedure | None | int | float | str) -> None:
@@ -146,6 +161,11 @@ def get_identifier_possibly_from_string(code: Code, scope: Scope) -> Identifier:
     else: raise EvaluationError(f"code evaluate to an identifier or string", code)
   return result
 
+def infer_type(data: int | float | str) -> Type:
+  if isinstance(data, int): return type_comptime_integer
+  if isinstance(data, float): return type_comptime_float
+  raise NotImplementedError(type(data))
+
 def evaluate_code(code: Code, scope: Scope) -> Value:
   if not isinstance(code.data, Tuple):
     if isinstance(code.data, Identifier):
@@ -154,7 +174,7 @@ def evaluate_code(code: Code, scope: Scope) -> Value:
       return entry.value
     else:
       assert isinstance(code.data, int | float)
-      return Value(infer_type(code.data, code.data))
+      return Value(infer_type(code.data), code.data)
   op_code, *arg_codes = code.data
   if isinstance(op_code.data, Identifier):
     if op_code.data == Identifier("|"):
@@ -166,7 +186,7 @@ def evaluate_code(code: Code, scope: Scope) -> Value:
     elif op_code.data == Identifier("proc"):
       name_code, parameter_codes, returns_code, *body_codes = arg_codes
       name = get_identifier_possibly_from_string(name_code, scope)
-      if not isinstance(parameter_codes.data, Tuple): raise EvaluationError("parameter list must be a tuple")
+      if not isinstance(parameter_codes.data, Tuple): raise EvaluationError("parameter list must be a tuple", parameter_codes)
       parameters = []
       parameter_scope = Scope(scope)
       parameter_scope.entries.update({
@@ -174,7 +194,8 @@ def evaluate_code(code: Code, scope: Scope) -> Value:
       })
       for parameter_code in parameter_codes.data: evaluate_code(parameter_code, parameter_scope)
       returns = evaluate_code(returns_code, scope)
-      return Value(type_procedure, Procedure(name, parameters, returns, body_codes))
+      scope.entries[name] = ScopeEntry(Value(type_procedure, Procedure(name, parameters, returns, body_codes)), constant=True)
+      return value_void
   proc = evaluate_code(op_code, scope)
   pargs = [evaluate_code(arg_code, scope) if not proc.ty.is_macro else Value(type_code, arg_code) for arg_code in arg_codes]
   return proc.contents(*pargs)
@@ -183,11 +204,15 @@ def value_as_string(value: Value) -> str:
   if value.ty == type_type: return type_as_string(value.contents)
   if value.ty == type_code: return code_as_string(value.contents)
   if value.ty == type_procedure: return f"(proc {value.contents.name} ({" ".join(f"(: {value_as_string(p[0])} {value_as_string(p[1])})" for p in value.contents.parameters)}) {value_as_string(value.contents.returns)})"
+  if value.ty == type_comptime_integer: return str(value.contents)
+  if value.ty == type_void: return "(cast (type 'VOID) 0)"
   raise NotImplementedError(value.ty)
 
 compiler_scope = Scope(None)
 compiler_scope.entries.update({
-  Identifier("u32"): ScopeEntry(Value(type_type, type_u32), constant=True)
+  Identifier("u32"): ScopeEntry(Value(type_type, type_u32), constant=True),
+  Identifier("<<"): ScopeEntry(Value(type_procedure, lambda lhs, rhs: Value(type_comptime_integer, lhs.contents << rhs.contents)), constant=True),
+  Identifier("&"): ScopeEntry(Value(type_procedure, lambda lhs, rhs: Value(type_comptime_integer, lhs.contents & rhs.contents)), constant=True),
 })
 
 def dostring(src: str, name: str) -> None:
@@ -199,7 +224,7 @@ def dostring(src: str, name: str) -> None:
     print(code_as_string(code))
     pos = next_pos
     result = evaluate_code(code, scope)
-    print(value_as_string(result))
+    if result is not value_void: print("=>", value_as_string(result))
 
 def dofile(path: str | Path) -> None:
   path = Path(path)
