@@ -1,1 +1,3 @@
-(+ 5 10)
+(:: x (+ 5 10))
+(proc hello () comptime-int (return x))
+(hello)

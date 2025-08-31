@@ -43,7 +43,7 @@ def parse_code(s: str, p: int) -> tuple[Code | None, int]:
       level -= 1
       if len(codes) > 1:
         popped = codes.pop()
-        codes.append(popped)
+        codes[-1].data.append(popped)
     elif s[p] == '"':
       p += 1
       while p < len(s) and (s[p - 1] == "\\" or s[p] != '"'): p += 1
@@ -81,6 +81,10 @@ class Type: pass
 class SimpleType(Type):
   def __init__(self, name: str) -> None:
     self.name = name
+class IntegerType(Type):
+  def __init__(self, bits: int, signed: bool) -> None:
+    self.bits = bits
+    self.signed = signed
 class ProcedureType(Type):
   def __init__(self, parameter_types: list[Type], return_type: Type, varargs_type: Type | None, is_macro: bool) -> None:
     self.parameter_types = parameter_types
@@ -90,9 +94,19 @@ class ProcedureType(Type):
 
 type_type = SimpleType("TYPE")
 type_code = SimpleType("CODE")
+type_anytype = SimpleType("ANYTYPE")
+type_noreturn = SimpleType("NORETURN")
 type_void = SimpleType("VOID")
 type_comptime_integer = SimpleType("COMPTIME_INTEGER")
+type_integers = {}
 type_procedures = {}
+
+def get_integer_type(bits: int, signed: bool) -> IntegerType:
+  for ty in type_integers:
+    if all([ty.bits == bits, ty.signed == signed]):
+      return ty
+  key = IntegerType(bits, signed)
+  return type_integers.setdefault(key, key)
 
 def get_procedure_type(parameter_types: list[Type], return_type: Type, varargs_type: Type | None = None, is_macro: bool = False) -> ProcedureType:
   for ty in type_procedures:
@@ -116,10 +130,40 @@ value_void = Value(type_void, None)
 def value_as_string(value: Value) -> str:
   if value.ty is type_type: return type_as_string(value.contents)
   if value.ty is type_code: return code_as_string(value.contents)
+  if value.ty is type_anytype: return f"($cast {type_as_string(type_anytype)} {value.contents})"
+  if value.ty is type_noreturn: return f"($cast {type_as_string(type_noreturn)} 0)"
   if value.ty is type_void: return f"($cast {type_as_string(type_void)} 0)"
   if value.ty is type_comptime_integer: return str(value.contents)
   if value.ty in type_procedures: return f"($cast {type_as_string(value.ty)} {value.contents.name})"
   raise NotImplementedError(value.ty)
+
+class Procedure:
+  def __init__(self, name: Identifier, parameter_names: list[Identifier], body_codes: list[Code], defining_scope: "Scope") -> None:
+    self.name = name
+    self.parameter_names = parameter_names
+    self.body_codes = body_codes
+    self.defining_scope = defining_scope
+  def __call__(self, *args: "Value", **kwargs) -> Value:
+    result = None
+    def compiler_return(*args: "Value", **kwargs) -> Value:
+      if len(args) > 1: raise EvaluationError("return takes a maximum of one value", kwargs["nearest_code"])
+      nonlocal result; result = args[0] if len(args) > 0 else value_void; return value_void
+    compiler_return.name = "return"
+
+    procedure_scope = Scope(self.defining_scope)
+    procedure_scope.entries.update({
+      Identifier("return"): ScopeEntry(value=Value(get_procedure_type([], type_void, varargs_type=kwargs["ty"].return_type), compiler_return), constant=True),
+    })
+
+    namedargs, varargs = args[:len(self.parameter_names)], args[len(self.parameter_names):]
+    for i, namedarg in enumerate(namedargs):
+      procedure_scope.entries.update({self.parameter_names[i]: namedarg})
+
+    for body_code in self.body_codes:
+      evaluate_code(body_code, procedure_scope)
+      if result is not None: break
+    if result is None: raise EvaluationError("procedure did not return a value", kwargs["nearest_code"])
+    return result
 
 class ScopeEntry:
   def __init__(self, value: Value, constant: bool) -> None:
@@ -151,8 +195,45 @@ def evaluate_code(code: Code, scope: Scope) -> Value:
   op_code, *arg_codes = code.data
   proc = evaluate_code(op_code, scope)
   if proc.ty not in type_procedures: raise EvaluationError(f"'{code_as_string(op_code)}' is not a procedure", op_code)
-  pargs = [evaluate_code(arg_code, scope) for arg_code in arg_codes]
-  return proc.contents(*pargs, ty=proc.ty, calling_scope=scope)
+  if len(arg_codes) != len(proc.ty.parameter_types):
+    if proc.ty.varargs_type is None: raise EvaluationError(f"incorrect arity, expected {len(proc.ty.parameter_types)}", op_code)
+    if len(arg_codes) < len(proc.ty.parameter_types): raise EvaluationError("expected more arguments", op_code)
+  pargs = [evaluate_code(arg_code, scope) if not proc.ty.is_macro or (proc.ty.parameter_types[i] if i < len(proc.ty.parameter_types) else proc.ty.varargs_type) is not type_code else arg_code for i, arg_code in enumerate(arg_codes)]
+  return proc.contents(*pargs, ty=proc.ty, calling_scope=scope, nearest_code=op_code)
+
+def compiler_define_constant(name_code: Code, value: Value, **kwargs) -> Value:
+  if not isinstance(name_code.data, Identifier): raise EvaluationError("argument 'name' expects an identifier", name_code)
+  name = name_code.data
+  if name in kwargs["calling_scope"].entries: raise EvaluationError(f"attempted redefinition of '{name}'", name_code)
+  kwargs["calling_scope"].entries[name] = ScopeEntry(value=value, constant=True)
+  return value_void
+compiler_define_constant.name = Identifier("::")
+
+def compiler_define_variable(name_code: Code, value: Value, **kwargs) -> Value:
+  if not isinstance(name_code.data, Identifier): raise EvaluationError("argument 'name' expects an identifier", name_code)
+  name = name_code.data
+  if name in kwargs["calling_scope"].entries: raise EvaluationError(f"attempted redefinition of '{name}'", name_code)
+  kwargs["calling_scope"].entries[name] = ScopeEntry(value=value, constant=False)
+  return value_void
+compiler_define_variable.name = Identifier(":=")
+
+def compiler_define_procedure(name_code: Code, parameters_code: Code, return_type_value: Value, *body_codes: Code, **kwargs) -> Value:
+  if not isinstance(name_code.data, Identifier): raise EvaluationError("argument 'name' expects an identifier", name_code)
+  name = name_code.data
+  if name in kwargs["calling_scope"].entries: raise EvaluationError(f"attempted redefinition of '{name}'", name_code)
+  if not isinstance(parameters_code.data, Tuple): raise EvaluationError("parameter tuple was not a tuple", name_code)
+  if return_type_value.ty is not type_type: raise EvaluationError("return type was not a type", name_code)
+  parameter_scope = Scope(kwargs["calling_scope"])
+  for parameter_code in parameters_code.data:
+    evaluate_code(parameter_code, parameter_scope)
+  parameter_types = []
+  parameter_names = []
+  for ident, value in parameter_scope.entries.items():
+    parameter_names.append(ident)
+    parameter_types.append(value.ty)
+  kwargs["calling_scope"].entries[name] = ScopeEntry(value=Value(get_procedure_type(parameter_types, return_type_value.contents), Procedure(name, parameter_names, body_codes, kwargs["calling_scope"])), constant=True)
+  return value_void
+compiler_define_procedure.name = Identifier("proc")
 
 def compiler_add(*args: Value, **kwargs) -> Value:
   result = 0
@@ -164,6 +245,10 @@ compiler_add.name = Identifier("+")
 
 compiler_scope = Scope(None)
 compiler_scope.entries.update({
+  Identifier("comptime-int"): ScopeEntry(Value(type_type, type_comptime_integer), constant=True),
+  compiler_define_constant.name: ScopeEntry(value=Value(get_procedure_type([type_code, type_anytype], type_void, is_macro=True), compiler_define_constant), constant=True),
+  compiler_define_variable.name: ScopeEntry(value=Value(get_procedure_type([type_code, type_anytype], type_void, is_macro=True), compiler_define_variable), constant=True),
+  compiler_define_procedure.name: ScopeEntry(value=Value(get_procedure_type([type_code, type_code, type_type], type_void, varargs_type=type_code, is_macro=True), compiler_define_procedure), constant=True),
   compiler_add.name: ScopeEntry(value=Value(get_procedure_type([], type_comptime_integer, varargs_type=type_comptime_integer), compiler_add), constant=True),
 })
 
