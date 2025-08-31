@@ -4,9 +4,14 @@ from pathlib import Path
 class Identifier(str): pass
 class Tuple(list): pass
 class Code:
-  def __init__(self, location: int, data: Identifier | int | float | str | Tuple) -> None:
+  def __init__(self, location: int, data: Identifier | int | str | Tuple) -> None:
     self.location = location
     self.data = data
+
+class ParseError(Exception):
+  def __init__(self, message: str, location: int) -> None:
+    self.message = message
+    self.location = location
 
 def isbasedigit(c: str, base: int) -> bool:
   if base == 2: return "0" <= c <= "1"
@@ -15,10 +20,6 @@ def isbasedigit(c: str, base: int) -> bool:
   if base == 16: return "0" <= c <= "9" or "a" <= c.lower() <= "f"
   raise NotImplementedError(base)
 
-class ParseError(Exception):
-  def __init__(self, message: str, location: int) -> None:
-    self.message = message
-    self.location = location
 def parse_code(s: str, p: int) -> tuple[Code | None, int]:
   initial_p = p
   level = 0
@@ -42,13 +43,13 @@ def parse_code(s: str, p: int) -> tuple[Code | None, int]:
       level -= 1
       if len(codes) > 1:
         popped = codes.pop()
-        codes[-1].data.append(popped)
+        codes.append(popped)
     elif s[p] == '"':
       p += 1
       while p < len(s) and (s[p - 1] == "\\" or s[p] != '"'): p += 1
       if p >= len(s) or s[p] != '"': raise ParseError("unterminated string literal", start)
       p += 1
-      (codes[-1].data if len(codes) > 0 else codes).append(Code(start, str(s[start:p])))
+      (codes[-1].data if len(codes) > 0 else codes).append(Code(start, s[start + 1:p - 1]))
     elif s[p].isdigit():
       base = 10
       if p + 1 < len(s) and s[p] == "0" and s[p + 1] in "box":
@@ -57,20 +58,20 @@ def parse_code(s: str, p: int) -> tuple[Code | None, int]:
         if s[p] == "o": base = 8
         if s[p] == "x": base = 16
         p += 1
-        if p >= len(s) or not isbasedigit(s[p], base): raise ParseError("invalid integer literal", start)
+        if p >= len(s) or not isbasedigit(s[p], base): raise ParseError("invalid integer literal")
       while p < len(s) and isbasedigit(s[p], base): p += 1
       (codes[-1].data if len(codes) > 0 else codes).append(Code(start, int(s[start:p], base=base)))
     else:
       while p < len(s) and not s[p].isspace() and s[p] not in "()": p += 1
       (codes[-1].data if len(codes) > 0 else codes).append(Code(start, Identifier(s[start:p])))
     if level == 0: break
-  assert len(codes) <= 1
   if level != 0: raise ParseError("missing closing parenthesis", initial_p)
+  assert len(codes) <= 1
   return codes.pop() if len(codes) > 0 else None, p
 
 def code_as_string(code: Code) -> str:
   if isinstance(code.data, Identifier): return code.data
-  elif isinstance(code.data, int | float): return str(code.data)
+  elif isinstance(code.data, int): return str(code.data)
   elif isinstance(code.data, str): return '"' + code.data + '"'
   else:
     assert isinstance(code.data, Tuple)
@@ -80,56 +81,45 @@ class Type: pass
 class SimpleType(Type):
   def __init__(self, name: str) -> None:
     self.name = name
-  def __repr__(self) -> str: return f"SimpleType({self.name})"
-class IntegerType(Type):
-  def __init__(self, bits: int, signed: bool) -> None:
-    self.bits = bits
-    self.signed = signed
 class ProcedureType(Type):
-  def __init__(self, is_macro: bool) -> None:
+  def __init__(self, parameter_types: list[Type], return_type: Type, varargs_type: Type | None, is_macro: bool) -> None:
+    self.parameter_types = parameter_types
+    self.return_type = return_type
+    self.varargs_type = varargs_type
     self.is_macro = is_macro
 
-type_type = SimpleType("type")
-type_code = SimpleType("code")
-type_noreturn = SimpleType("noreturn")
-type_void = SimpleType("void")
-type_bool = SimpleType("bool")
-type_comptime_integer = SimpleType("comptime_integer")
-type_comptime_float = SimpleType("comptime_float")
-type_procedure = ProcedureType(is_macro=False)
-type_macro = ProcedureType(is_macro=True)
-type_u32 = IntegerType(32, False)
+type_type = SimpleType("TYPE")
+type_code = SimpleType("CODE")
+type_void = SimpleType("VOID")
+type_comptime_integer = SimpleType("COMPTIME_INTEGER")
+type_procedures = {}
+
+def get_procedure_type(parameter_types: list[Type], return_type: Type, varargs_type: Type | None = None, is_macro: bool = False) -> ProcedureType:
+  for ty in type_procedures:
+    if all([*[a is b for a, b in zip(ty.parameter_types, parameter_types)], ty.return_type is return_type, ty.varargs_type is varargs_type, ty.is_macro == is_macro]):
+      return ty
+  key = ProcedureType(parameter_types, return_type, varargs_type, is_macro)
+  return type_procedures.setdefault(key, key)
 
 def type_as_string(ty: Type) -> str:
-  if isinstance(ty, SimpleType): return ty.name
-  if isinstance(ty, IntegerType): return f"{"s" if ty.signed else "u"}{ty.bits}"
+  if isinstance(ty, SimpleType): return f"($type {ty.name})"
+  if isinstance(ty, ProcedureType): return f"($type PROCEDURE #parameter_types ({" ".join(map(type_as_string, ty.parameter_types))}) #return_type {type_as_string(ty.return_type)} #varargs_type {type_as_string(ty.varargs_type) if ty.varargs_type is not None else "null"} #is_macro {"true" if ty.is_macro else "false"})"
   raise NotImplementedError(ty)
 
-class Procedure:
-  def __init__(self, name: Identifier, parameters: list[tuple["Value", "Value"]], returns: "Value", body_codes: list[Code]) -> None:
-    self.name = name
-    self.parameters = parameters
-    self.returns = returns
-    self.body_codes = body_codes
-  def __call__(self, *args) -> "Value":
-    return_value = value_void
-    procedure_scope = Scope(compiler_scope)
-    def return_stmt(value: "Value") -> "Value":
-      nonlocal return_value; return_value = value; return value_void
-    procedure_scope.entries.update({
-      Identifier("return"): ScopeEntry(Value(type_procedure, return_stmt), constant=True)
-    })
-    for i, (name_value, type_value) in enumerate(self.parameters):
-      procedure_scope.entries.update({Identifier(value_as_string(name_value)): ScopeEntry(args[i], constant=False)})
-    for code in self.body_codes:
-      result = evaluate_code(code, procedure_scope)
-      # if result is not value_void: print("=>", value_as_string(result))
-    return return_value
-
 class Value:
-  def __init__(self, ty: Type, contents: Type | Code | Procedure | None | int | float | str) -> None:
+  def __init__(self, ty: Type, contents: Type | Code | None) -> None:
     self.ty = ty
     self.contents = contents
+
+value_void = Value(type_void, None)
+
+def value_as_string(value: Value) -> str:
+  if value.ty is type_type: return type_as_string(value.contents)
+  if value.ty is type_code: return code_as_string(value.contents)
+  if value.ty is type_void: return f"($cast {type_as_string(type_void)} 0)"
+  if value.ty is type_comptime_integer: return str(value.contents)
+  if value.ty in type_procedures: return f"($cast {type_as_string(value.ty)} {value.contents.name})"
+  raise NotImplementedError(value.ty)
 
 class ScopeEntry:
   def __init__(self, value: Value, constant: bool) -> None:
@@ -144,93 +134,64 @@ class Scope:
     if self.parent is not None: return self.parent.find(key)
     return None
 
-value_void = Value(type_void, None)
-
 class EvaluationError(Exception):
-  def __init__(self, message: str, code: int) -> None:
+  def __init__(self, message: str, code: Code) -> None:
     self.message = message
     self.code = code
-  def __str__(self) -> str: return f"file[{self.code.location}] {self.message}"
-
-def get_identifier_possibly_from_string(code: Code, scope: Scope) -> Identifier:
-  if isinstance(code.data, Identifier): result = code.data
-  else:
-    value = evaluate_code(code, scope)
-    if isinstance(value.ty, type_string): result = Identifier(value.contents)
-    elif isinstance(value.ty, type_code) and isinstance(value.contents.data, Identifier): result = value.contents.data
-    else: raise EvaluationError(f"code evaluate to an identifier or string", code)
-  return result
-
-def infer_type(data: int | float | str) -> Type:
-  if isinstance(data, int): return type_comptime_integer
-  if isinstance(data, float): return type_comptime_float
-  raise NotImplementedError(type(data))
 
 def evaluate_code(code: Code, scope: Scope) -> Value:
-  if not isinstance(code.data, Tuple):
-    if isinstance(code.data, Identifier):
-      entry = scope.find(code.data)
-      if entry is None: raise EvaluationError(f"identifier '{code.data}' not in scope", code)
-      return entry.value
-    else:
-      assert isinstance(code.data, int | float)
-      return Value(infer_type(code.data), code.data)
+  if isinstance(code.data, Identifier):
+    entry = scope.find(code.data)
+    if entry is None: raise EvaluationError(f"'{code.data}' not in scope", code)
+    return entry.value
+  if isinstance(code.data, int): return Value(type_comptime_integer, code.data)
+  if isinstance(code.data, str): raise NotImplementedError()
+  assert isinstance(code.data, Tuple)
+  if len(code.data) == 0: raise EvaluationError("procedure call without name", code)
   op_code, *arg_codes = code.data
-  if isinstance(op_code.data, Identifier):
-    if op_code.data == Identifier("|"):
-      result = 0
-      for arg in [evaluate_code(arg_code, scope) for arg_code in arg_codes]:
-        if arg.ty != type_comptime_integer: raise NotImplementedError(arg.ty)
-        result |= arg.contents
-      return Value(type_comptime_integer, result)
-    elif op_code.data == Identifier("proc"):
-      name_code, parameter_codes, returns_code, *body_codes = arg_codes
-      name = get_identifier_possibly_from_string(name_code, scope)
-      if not isinstance(parameter_codes.data, Tuple): raise EvaluationError("parameter list must be a tuple", parameter_codes)
-      parameters = []
-      parameter_scope = Scope(scope)
-      parameter_scope.entries.update({
-        Identifier(":"): ScopeEntry(Value(type_macro, lambda name, value: parameters.append((name, value))), constant=True)
-      })
-      for parameter_code in parameter_codes.data: evaluate_code(parameter_code, parameter_scope)
-      returns = evaluate_code(returns_code, scope)
-      scope.entries[name] = ScopeEntry(Value(type_procedure, Procedure(name, parameters, returns, body_codes)), constant=True)
-      return value_void
   proc = evaluate_code(op_code, scope)
-  pargs = [evaluate_code(arg_code, scope) if not proc.ty.is_macro else Value(type_code, arg_code) for arg_code in arg_codes]
-  return proc.contents(*pargs)
+  if proc.ty not in type_procedures: raise EvaluationError(f"'{code_as_string(op_code)}' is not a procedure", op_code)
+  pargs = [evaluate_code(arg_code, scope) for arg_code in arg_codes]
+  return proc.contents(*pargs, ty=proc.ty, calling_scope=scope)
 
-def value_as_string(value: Value) -> str:
-  if value.ty == type_type: return type_as_string(value.contents)
-  if value.ty == type_code: return code_as_string(value.contents)
-  if value.ty == type_procedure: return f"(proc {value.contents.name} ({" ".join(f"(: {value_as_string(p[0])} {value_as_string(p[1])})" for p in value.contents.parameters)}) {value_as_string(value.contents.returns)})"
-  if value.ty == type_comptime_integer: return str(value.contents)
-  if value.ty == type_void: return "(cast (type 'VOID) 0)"
-  raise NotImplementedError(value.ty)
+def compiler_add(*args: Value, **kwargs) -> Value:
+  result = 0
+  for arg in args:
+    if arg.ty is not kwargs["ty"].varargs_type: raise EvaluationError("add only supports comptime integers for now")
+    result += arg.contents
+  return Value(kwargs["ty"].return_type, result)
+compiler_add.name = Identifier("+")
 
 compiler_scope = Scope(None)
 compiler_scope.entries.update({
-  Identifier("u32"): ScopeEntry(Value(type_type, type_u32), constant=True),
-  Identifier("<<"): ScopeEntry(Value(type_procedure, lambda lhs, rhs: Value(type_comptime_integer, lhs.contents << rhs.contents)), constant=True),
-  Identifier("&"): ScopeEntry(Value(type_procedure, lambda lhs, rhs: Value(type_comptime_integer, lhs.contents & rhs.contents)), constant=True),
+  compiler_add.name: ScopeEntry(value=Value(get_procedure_type([], type_comptime_integer, varargs_type=type_comptime_integer), compiler_add), constant=True),
 })
 
-def dostring(src: str, name: str) -> None:
+def dostring(src: str, scope: Scope, silence: bool = True) -> None:
   pos = 0
-  scope = Scope(compiler_scope)
   while True:
     code, next_pos = parse_code(src, pos)
     if code is None: break
-    print(code_as_string(code))
     pos = next_pos
+    # print(code_as_string(code))
     result = evaluate_code(code, scope)
-    if result is not value_void: print("=>", value_as_string(result))
+    if not silence and result is not value_void: print("=>", value_as_string(result))
 
-def dofile(path: str | Path) -> None:
-  path = Path(path)
-  with open(path) as f: src = f.read()
-  dostring(src, name=path.name)
+def dofile(path: Path) -> None:
+  file_scope = Scope(compiler_scope)
+  try: dostring(path.read_text(), file_scope)
+  except ParseError as e: print(f"parse error @ {path.name}[{e.location}]: {e.message}")
+  except EvaluationError as e: print(f"evaluation error @ {path.name}[{e.code.location}]: {e.message}")
+
+def repl() -> None:
+  repl_scope = Scope(compiler_scope)
+  while True:
+    try: i = input("> ")
+    except (KeyboardInterrupt, EOFError): print(""); break
+    try: dostring(i, repl_scope, silence=False)
+    except ParseError as e: print(f"parse error @ repl[{e.location}]: {e.message}")
+    except EvaluationError as e: print(f"evaluation error @ repl[{e.code.location}]: {e.message}")
 
 if __name__ == "__main__":
-  if len(sys.argv) <= 1: raise Exception("usage: python aperion.py file.aperion")
-  dofile(sys.argv[1])
+  if len(sys.argv) <= 1: repl()
+  else: dofile(Path(sys.argv[1]))
