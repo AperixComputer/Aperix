@@ -1,0 +1,24 @@
+enum Endianness
+  = LITTLE 0
+  = BIG 1
+
+proc to-bytes (x n (= byteorder Endianness.BIG)) (expr "[n]int8")
+  if (== byteorder compiler.target.endianness)
+    return (expr "x.&.(^[n]int8).^")
+  return (to-bytes (swap-endian x) compiler.target.endianness)
+
+struct BinaryWriter
+  : output (expr "[..]int8")
+
+proc emit (w n (.. args)) void
+  for args
+    ~= w.output (to-bytes it n (= byteorder Endianness.LITTLE))
+
+: w BinaryWriter
+block
+  using w
+  emit 4 0x240
+  emit 4 0x200000
+  for-range 0 636
+    emit 1 0
+  ; ...
