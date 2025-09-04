@@ -1,11 +1,8 @@
-Integer = type.(enum.INTEGER)
-x = 5
-y = 10
-x + y * 4
-f = () i32 {
-  if x
-    return(x.cast.(i32))
-  else {
-    print.(25)
-  }
-}
+($define i32 ($type INTEGER #bits 32))
+($define x 5)
+($define y 10)
+($operator + ($operator * y 4) x)
+($procedure f () i32
+  ($if x
+    ($return ($cast x i32))
+    ($return ($cast y i32))))
