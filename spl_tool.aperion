@@ -1,6 +1,11 @@
-i32 = type(.INTEGER, bits=32)
+Integer = type.(enum.INTEGER)
 x = 5
-hello = (y: i32) i32 {
-  return(x + y)
+y = 10
+x + y * 4
+f = () i32 {
+  if x
+    return(x.cast.(i32))
+  else {
+    print.(25)
+  }
 }
-hello(10)
