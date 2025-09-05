@@ -195,7 +195,12 @@ class Parser:
 
 	def parse_factor(self) -> Code:
 		result = self.parse_single()
-		if result is None: raise ParseError("unknown factor", self.peek())
+		if result is None:
+			if self.peek().kind == ord('('):
+				self.eat(ord('('))
+				result = self.parse_expression()
+				self.eat(ord(')'))
+			else: raise ParseError("unknown factor", self.peek())
 		while True:
 			if self.peek().kind == ord('.'):
 				self.eat(ord('.'))
@@ -332,6 +337,20 @@ def code_as_string(code: Code, s: str, level: int) -> str:
 		if len(code.attributes) > 0: result += " #(" + ", ".join(code_as_string(parameter, s, level) for parameter in code.parameters) + ")"
 		result += "\n" + code_as_string(code.body, s, level)
 		return result
+	if isinstance(code, BinaryOperator):
+		def precedence_of(kind: int) -> int:
+			if kind in [TokenKind.EQEQ, TokenKind.BANGEQ]: return 0
+			if kind in [TokenKind.OROR]: return 1
+			if kind in [TokenKind.ANDAND]: return 2
+			if kind in [ord('+'), ord('-')]: return 3
+			if kind in [ord('*'), ord('/'), ord('%')]: return 4
+			raise NotImplementedError(TokenKind.as_str(kind))
+		precedence = precedence_of(code.op.kind)
+		lhs = code_as_string(code.lhs, s, level)
+		if isinstance(code.lhs, BinaryOperator) and precedence_of(code.lhs.op.kind) < precedence: lhs = f"({lhs})"
+		rhs = code_as_string(code.rhs, s, level)
+		if isinstance(code.rhs, BinaryOperator) and precedence_of(code.rhs.op.kind) < precedence: rhs = f"({rhs})"
+		return f"{lhs} {code.op.as_str(s)} {rhs}"
 	if isinstance(code, Call):
 		result = f"{code_as_string(code.lhs, s, level)}!({", ".join(code_as_string(argument, s, level) for argument in code.arguments)})"
 		return result

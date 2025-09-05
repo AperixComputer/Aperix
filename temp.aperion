@@ -1,11 +1,13 @@
-type = 0.type_of!().type_of!()
-i32 = type.type_info!().type_of!()
+x = 5 + 10 * 20
 
-cast_example = () {
-	return x.f!"".(i32)
-}
-
-x = 5
-f = () {
-
-}
+// type = 0.type_of!().type_of!()
+// i32 = type.type_info!().type_of!()
+//
+// cast_example = () {
+// 	return x.f!"".(i32)
+// }
+//
+// x = 5
+// f = () {
+//
+// }
