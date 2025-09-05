@@ -361,6 +361,71 @@ def code_as_string(code: Code, s: str, level: int) -> str:
 		return f"return {code_as_string(code.rhs, s, level)}"
 	raise NotImplementedError(code.__class__.__name__)
 
+class Evaluator:
+	class Error(Exception):
+		def __init__(self, message: str, code: Code) -> None:
+			self.message = message
+			self.code = code
+
+	@dataclass(frozen=True)
+	class Type: pass
+	@dataclass(frozen=True)
+	class VoidType(Type): pass
+	@dataclass(frozen=True)
+	class IntegerType(Type):
+		bits: int
+
+	type_type = Type()
+	type_void = VoidType()
+	type_i32 = IntegerType(32)
+
+	@dataclass
+	class Value:
+		ty: "Evaluator.Type"
+		contents: "Evaluator.Type | int | None"
+
+		@property
+		def as_type(self) -> "Evaluator.Type": assert self.ty is Evaluator.type_type and isinstance(self.contents, Evaluator.Type); return self.contents
+
+	value_void = Value(type_void, None)
+
+	@dataclass
+	class ScopeEntry:
+		value: "Evaluator.Value"
+
+	class Scope:
+		def __init__(self, parent: "Evaluator.Scope | None") -> None:
+			self.parent = parent
+			self.entries: dict[str, Evaluator.ScopeEntry] = {}
+
+	def __init__(self, s: str) -> None:
+		self.s = s
+
+	def visit(self, code: Code, scope: Scope) -> "Evaluator.Value":
+		if isinstance(code, Block):
+			block_scope = scope if code.implicit else Evaluator.Scope(scope)
+			for child in code.children:
+				self.visit(child, block_scope)
+			return Evaluator.value_void
+		if isinstance(code, Declaration):
+			typespec: Evaluator.Type | None = None
+			if code.typespec is not None: typespec = self.visit(code.typespec, scope).as_type
+			rhs: Evaluator.Value | None = None
+			if code.rhs is not None: rhs = self.visit(code.rhs, scope)
+			if typespec is not None and rhs is not None and typespec is not rhs.ty: raise Evaluator.Error("type mismatch", code)
+			assert typespec is not None or rhs is not None
+			ty = typespec if typespec is not None else rhs.ty if rhs is not None else self.type_type
+			scope.entries[code.lhs.as_str(self.s)] = Evaluator.ScopeEntry(Evaluator.Value(ty, rhs.contents if rhs is not None else None))
+			return Evaluator.value_void
+		if isinstance(code, BinaryOperator):
+			lhs = self.visit(code.lhs, scope)
+			rhs = self.visit(code.rhs, scope)
+			return Evaluator.Value(Evaluator.type_i32, eval(f"{lhs.contents} {code.op.as_str(self.s)} {rhs.contents}"))
+		if isinstance(code, Literal):
+			if isinstance(code.value, int): return Evaluator.Value(Evaluator.type_i32, code.value)
+			raise NotImplementedError(type(code.value))
+		raise NotImplementedError(code.__class__.__name__)
+
 if __name__ == "__main__":
 	if len(sys.argv) < 2:
 		print("usage: ./aperion.py file.aperion")
@@ -369,7 +434,11 @@ if __name__ == "__main__":
 	path = Path(sys.argv[1])
 	src = path.read_text()
 	parser = Parser(src)
+	evaluator = Evaluator(src)
+	file_scope = Evaluator.Scope(None)
 	try:
 		module = parser.parse_block(implicit=True)
 		print(code_as_string(module, parser.s, 0))
+		evaluator.visit(module, file_scope)
+		print(file_scope.entries)
 	except ParseError as e: print(f"parse error @ {path.name}[{e.token.location}] near '{e.token.as_str(parser.s)}': {e.message}")
