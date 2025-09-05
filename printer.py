@@ -25,8 +25,6 @@ def code_as_string(code: Code, s: str, level: int) -> str:
 		if len(code.attributes) > 0: result += " #(" + ", ".join(code_as_string(parameter, s, level) for parameter in code.parameters) + ")"
 		result += "\n" + code_as_string(code.body, s, level)
 		return result
-	if isinstance(code, PrefixOperator):
-		return f"{code.op.as_str(s)}({code_as_string(code.rhs, s, level)})"
 	if isinstance(code, BinaryOperator):
 		def precedence_of(kind: int) -> int:
 			if kind in [TokenKind.EQEQ, TokenKind.BANGEQ]: return 0
@@ -41,6 +39,8 @@ def code_as_string(code: Code, s: str, level: int) -> str:
 		rhs = code_as_string(code.rhs, s, level)
 		if isinstance(code.rhs, BinaryOperator) and precedence_of(code.rhs.op.kind) < precedence: rhs = f"({rhs})"
 		return f"{lhs} {code.op.as_str(s)} {rhs}"
+	if isinstance(code, PostfixOperator):
+		return f"{code_as_string(code.lhs, s, level)}.{code.op.as_str(s)}"
 	if isinstance(code, Call):
 		result = f"{code_as_string(code.lhs, s, level)}!({", ".join(code_as_string(argument, s, level) for argument in code.arguments)})"
 		return result

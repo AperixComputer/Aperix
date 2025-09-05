@@ -34,14 +34,14 @@ class Procedure(Code):
 	attributes: list[Declaration]
 	body: Block
 @dataclass
-class PrefixOperator(Code):
-	op: Token
-	rhs: Code
-@dataclass
 class BinaryOperator(Code):
 	lhs: Code
 	op: Token
 	rhs: Code
+@dataclass
+class PostfixOperator(Code):
+	lhs: Code
+	op: Token
 @dataclass
 class Call(Code):
 	lhs: Code
@@ -102,10 +102,6 @@ class Parser:
 				self.eat(ord('('))
 				result = self.parse_expression()
 				self.eat(ord(')'))
-			elif self.peek().kind == ord('!'):
-				op = self.eat(ord('!'))
-				rhs = self.parse_factor()
-				result = PrefixOperator(op, rhs)
 			else: raise ParseError("unknown factor", self.peek())
 		while True:
 			if self.peek().kind == ord('.'):
@@ -130,11 +126,16 @@ class Parser:
 						arguments.append(result)
 					result = Call(lhs, arguments)
 					continue
+				elif self.peek().kind in [ord('!')]:
+					op = self.eat(self.peek().kind)
+					result = PostfixOperator(result, op)
+					continue
 				elif self.peek().kind == ord('('):
 					self.eat(ord('('))
 					typespec = self.parse_expression()
 					self.eat(ord(')'))
 					result = Cast(result, typespec)
+					continue
 				else: raise ParseError("unknown chain", self.peek())
 			break
 		return result

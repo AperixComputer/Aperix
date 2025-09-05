@@ -70,12 +70,14 @@ def evaluate_code(code: Code, s: str, scope: Scope, echo_results: bool) -> Value
 			ty = Value(type_type, rhs.ty)
 		scope.entries[name] = ScopeEntry(Value(ty.as_type, rhs.contents if rhs is not None else None))
 		return value_void
-	if isinstance(code, PrefixOperator):
-		return Value(type_i32, int(eval(f"not bool({evaluate_code(code.rhs, s, scope, echo_results).as_int})")))
 	if isinstance(code, BinaryOperator):
 		lhs = evaluate_code(code.lhs, s, scope, echo_results).as_int
 		rhs2 = evaluate_code(code.rhs, s, scope, echo_results).as_int
 		return Value(type_i32, eval(f"{lhs} {code.op.as_str(s)} {rhs2}"))
+	if isinstance(code, PostfixOperator):
+		lhs = evaluate_code(code.lhs, s, scope, echo_results).as_int
+		assert code.op.as_str(s) == '!'
+		return Value(type_i32, eval(f"not ({lhs})"))
 	if isinstance(code, Literal):
 		if isinstance(code.value, int): return Value(type_i32, code.value)
 		raise NotImplementedError(type(code.value))
