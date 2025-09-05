@@ -34,6 +34,10 @@ class Procedure(Code):
 	attributes: list[Declaration]
 	body: Block
 @dataclass
+class PrefixOperator(Code):
+	op: Token
+	rhs: Code
+@dataclass
 class BinaryOperator(Code):
 	lhs: Code
 	op: Token
@@ -98,6 +102,10 @@ class Parser:
 				self.eat(ord('('))
 				result = self.parse_expression()
 				self.eat(ord(')'))
+			elif self.peek().kind == ord('!'):
+				op = self.eat(ord('!'))
+				rhs = self.parse_factor()
+				result = PrefixOperator(op, rhs)
 			else: raise ParseError("unknown factor", self.peek())
 		while True:
 			if self.peek().kind == ord('.'):

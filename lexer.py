@@ -63,9 +63,10 @@ def token_at(s: str, p: int) -> Token:
 		if s[start:p] == "union": return Token(TokenKind.KEYWORD_UNION, start, p - start)
 		if s[start:p] == "enum": return Token(TokenKind.KEYWORD_ENUM, start, p - start)
 		return Token(TokenKind.IDENTIFIER, start, p - start)
-	if s[p].isdigit():
+	if s[p].isdigit() or (p + 1 < len(s) and s[p] in "+-" and s[p + 1].isdigit()):
 		is_float = False
 		base = 10
+		if s[p] in "+-": p += 1
 		if p + 1 < len(s) and s[p] == '0' and s[p + 1] in "box":
 			p += 1
 			if s[p] == 'b': base = 2
@@ -79,8 +80,9 @@ def token_at(s: str, p: int) -> Token:
 			if base != 10: return Token(TokenKind.ERROR, start, p - start)
 			is_float = True
 			while p < len(s) and s[p].isdigit(): p += 1
-		if p + 1 < len(s) and s[p].lower() == 'e' and s[p + 1].isdigit():
+		if p + 1 < len(s) and s[p].lower() == 'e' and (s[p + 1].isdigit() or (p + 2 < len(s) and s[p + 1] in "+-" and s[p + 2].isdigit())):
 			p += 1
+			if s[p] in "+=": p += 1
 			if base != 10: return Token(TokenKind.ERROR, start, p - start)
 			is_float = True
 			while p < len(s) and s[p].isdigit(): p += 1
